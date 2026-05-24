@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Heart, Zap, ShieldAlert, Compass, KeyRound, 
-  Layers, ShoppingBag, Eye, Lock, Activity,
-  Skull, CheckCircle2
+  Layers, Eye, Lock, Activity,
+  Skull, CheckCircle2, Trash2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -74,6 +74,43 @@ export default function App() {
   // Navigation & UI States
   const [activeTab, setActiveTab] = useState<'SPLASH' | 'DASHBOARD' | 'MAP' | 'CHAMBER' | 'UPGRADES' | 'INVENTORY' | 'ORACLE'>('SPLASH');
   const [profile, setProfile] = useState<UserProfile | null>(null);
+
+  // Responsiveness States
+  const [deviceScale, setDeviceScale] = useState(1);
+  const [isMobile, setIsMobile] = useState(false);
+  const touchTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isLongPressRef = useRef(false);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const mobile = width < 500;
+      setIsMobile(mobile);
+
+      if (mobile) {
+        setDeviceScale(1);
+        return;
+      }
+
+      // Design target dimensions
+      const targetWidth = 390;
+      const targetHeight = 860;
+      const verticalPadding = 48; // safe layout padding
+      const horizontalPadding = 32;
+
+      const scaleX = width / (targetWidth + horizontalPadding);
+      const scaleY = height / (targetHeight + verticalPadding);
+
+      // Fit to screen height & width, capped at 1.0x scale
+      const scale = Math.min(scaleX, scaleY, 1.0);
+      setDeviceScale(scale);
+    };
+
+    window.addEventListener('resize', handleResize);
+    handleResize();
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
   const [levels, setLevels] = useState<LevelConfig[]>([]);
   const [activeLevel, setActiveLevel] = useState<LevelConfig | null>(null);
   const [notification, setNotification] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
@@ -86,13 +123,16 @@ export default function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [vitality, setVitality] = useState<number>(100);
   const [neuralLoad, setNeuralLoad] = useState<number>(0);
-  const [activeTool, setActiveTool] = useState<'SCALPEL' | 'SUTURE' | 'INJECTOR' | null>(null);
   const [isFreezeActive, setIsFreezeActive] = useState<boolean>(false);
   const [freezeTimeRemaining, setFreezeTimeRemaining] = useState<number>(0);
   const [connectedNodes, setConnectedNodes] = useState<Set<string>>(new Set());
   const [isPathConnected, setIsPathConnected] = useState<boolean>(false);
   const [gameStatus, setGameStatus] = useState<'PLAYING' | 'SUCCESS' | 'FAILED'>('PLAYING');
   const [failReason, setFailReason] = useState<string>('');
+  const [showHint, setShowHint] = useState<boolean>(false);
+  const [isStartupHintActive, setIsStartupHintActive] = useState<boolean>(false);
+  const [isHintUnlockedForRun, setIsHintUnlockedForRun] = useState<boolean>(false);
+  const [buildType, setBuildType] = useState<ConnectorType>('STRAIGHT');
 
   // Fetch initial profile and levels
   const fetchProfile = async () => {
@@ -156,20 +196,27 @@ export default function App() {
     }
   };
 
-  // Tool buying handlers
-  const handleBuyTool = async (type: string, qty: number) => {
+  // Use/Buy diagnostic hint handler
+  const handleUseHint = async () => {
+    if (isHintUnlockedForRun) {
+      setShowHint(true);
+      return;
+    }
+
     try {
-      const res = await fetch('/api/inventory/buy', {
+      const res = await fetch('/api/hint/use', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemType: type, quantity: qty })
+        headers: { 'Content-Type': 'application/json' }
       });
       const data = await res.json();
       if (res.ok) {
         setProfile(data.profile);
-        triggerNotification(`Purchased ${qty}x ${type.replace(/_/g, ' ')}`, 'success');
+        setIsHintUnlockedForRun(true);
+        setShowHint(true);
+        setIsStartupHintActive(false); // Cancel startup timeout since manual is active
+        triggerNotification("Diagnostic guide activated (15 Bio-Shards deducted).", 'success');
       } else {
-        triggerNotification(data.error || "Purchase failed", 'error');
+        triggerNotification(data.error || "Failed to activate diagnostic guide", 'error');
       }
     } catch (e) {
       triggerNotification("API Connection Error", 'error');
@@ -207,15 +254,25 @@ export default function App() {
     setElapsedSeconds(0);
     setVitality(100);
     setNeuralLoad(0);
-    setActiveTool(null);
     setIsFreezeActive(false);
     setFreezeTimeRemaining(0);
     setIsPathConnected(false);
     setConnectedNodes(new Set());
 
-    // Generate hexagonal matrix (5x5 axial layout)
+    const diagUpgrade = profile?.upgrades.find(u => u.upgradeKey === "DIAGNOSTIC_PRECISION");
+    const diagTier = diagUpgrade ? diagUpgrade.tier : 0;
+    setIsHintUnlockedForRun(diagTier > 0);
+    if (diagTier > 0) {
+      setShowHint(true);
+      setIsStartupHintActive(true);
+    } else {
+      setShowHint(false);
+      setIsStartupHintActive(false);
+    }
+
+    // Generate hexagonal matrix (axial layout based on level config)
     const newGrid: GridTile[] = [];
-    const size = 5;
+    const size = lvl.width || 5;
     
     const isTutorial = tourStep !== null && lvl.levelNumber === 1;
 
@@ -303,6 +360,19 @@ export default function App() {
         frozen = true;
       }
 
+      // Handle diagnostic startup hint timeout
+      if (isStartupHintActive) {
+        const diagUpgrade = profile?.upgrades.find(u => u.upgradeKey === "DIAGNOSTIC_PRECISION");
+        const diagTier = diagUpgrade ? diagUpgrade.tier : 0;
+        if (diagTier === 1 && delta >= 3) {
+          setShowHint(false);
+          setIsStartupHintActive(false);
+        } else if (diagTier === 2 && delta >= 5) {
+          setShowHint(false);
+          setIsStartupHintActive(false);
+        }
+      }
+
       // Calculate vitality decay
       if (!frozen) {
         const sectorStability = profile?.sectorStability.find(s => s.sectorId === activeLevel.sectorId)?.stabilityScore || 100;
@@ -328,7 +398,7 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [activeTab, gameStatus, startTime, isFreezeActive, freezeTimeRemaining, grid, connectedNodes, activeLevel, profile]);
+  }, [activeTab, gameStatus, startTime, isFreezeActive, freezeTimeRemaining, grid, connectedNodes, activeLevel, profile, isStartupHintActive]);
 
   // Hex directional connectivity offsets
   const HEX_DIRECTIONS = [
@@ -382,7 +452,7 @@ export default function App() {
     }
 
     const rotationActions = actions.filter(a => a.actionType === 'ROTATE').length;
-    const actionFrictionLoad = rotationActions * 5;
+    const actionFrictionLoad = rotationActions * 2;
     const finalLoad = totalCompLoad + actionFrictionLoad;
     setNeuralLoad(finalLoad);
 
@@ -469,130 +539,101 @@ export default function App() {
 
     const tile = grid[targetIndex];
 
-    // Tool logic overrides standard connector placements
-    if (activeTool) {
-      if (activeTool === 'SCALPEL') {
-        if (tile.type !== 'BLOCKED') return;
-        
-        // Use scalpel
-        const inventoryScalpel = profile?.inventory.find(i => i.itemType === 'LASER_SCALPEL');
-        if (!inventoryScalpel || inventoryScalpel.quantity <= 0) {
-          triggerNotification("No Laser Scalpels left in inventory!", 'error');
-          return;
-        }
-
-        // Clear block
-        const updated = [...grid];
-        updated[targetIndex] = { ...tile, type: 'HEALTHY' };
-        setGrid(updated);
-        setActions(prev => [...prev, { timestampMs: Date.now() - startTime, actionType: 'TOOL_SCALPEL', q, r }]);
-        
-        // Deduct local profile state
-        if (profile) {
-          setProfile({
-            ...profile,
-            inventory: profile.inventory.map(i => i.itemType === 'LASER_SCALPEL' ? { ...i, quantity: i.quantity - 1 } : i)
-          });
-        }
-        setActiveTool(null);
-        triggerNotification("Sandstone block cleared.", 'success');
-      } 
-      
-      else if (activeTool === 'SUTURE') {
-        if (tile.connector === 'NONE') return;
-        if (tile.isLocked) return;
-
-        const inventorySuture = profile?.inventory.find(i => i.itemType === 'SUTURE_NEEDLE');
-        if (!inventorySuture || inventorySuture.quantity <= 0) {
-          triggerNotification("No Suture Needles left in inventory!", 'error');
-          return;
-        }
-
-        const updated = [...grid];
-        updated[targetIndex] = { ...tile, isLocked: true };
-        setGrid(updated);
-        setActions(prev => [...prev, { timestampMs: Date.now() - startTime, actionType: 'TOOL_SUTURE', q, r }]);
-
-        if (profile) {
-          setProfile({
-            ...profile,
-            inventory: profile.inventory.map(i => i.itemType === 'SUTURE_NEEDLE' ? { ...i, quantity: i.quantity - 1 } : i)
-          });
-        }
-        setActiveTool(null);
-        triggerNotification("Connector suture locked.", 'success');
-      }
-      return;
-    }
-
-    // Default flow: click healthy tile to cycle connectors, click existing to rotate
+    // Default flow: click healthy tile to place or rotate
     if (tile.type === 'BLOCKED' || tile.type === 'INPUT' || tile.type === 'OUTPUT') return;
 
     const updated = [...grid];
+
+    // Dismantle tool selected
+    if (buildType === 'NONE') {
+      if (tile.connector !== 'NONE') {
+        if (tile.isLocked) {
+          triggerNotification("This component is sutured in place.", 'error');
+        } else {
+          updated[targetIndex] = { ...tile, connector: 'NONE', rotation: 0 };
+          setActions(prev => [...prev, { timestampMs: Date.now() - startTime, actionType: 'DELETE', q, r }]);
+          triggerNotification("Component dismantled.", 'success');
+        }
+      }
+      setGrid(updated);
+      return;
+    }
+
     if (tile.connector === 'NONE') {
-      // Place straight connector
-      updated[targetIndex] = { ...tile, connector: 'STRAIGHT', rotation: 0 };
-      setActions(prev => [...prev, { timestampMs: Date.now() - startTime, actionType: 'PLACE', q, r, param: 'STRAIGHT' }]);
+      // Place selected connector type
+      updated[targetIndex] = { ...tile, connector: buildType, rotation: 0 };
+      setActions(prev => [...prev, { timestampMs: Date.now() - startTime, actionType: 'PLACE', q, r, param: buildType }]);
     } else if (tile.isLocked) {
       // Piece locked, ignore clicks
       triggerNotification("This component is sutured in place.", 'error');
+    } else if (tile.connector !== buildType) {
+      // Swap connector type to currently selected build type, resetting rotation to 0
+      updated[targetIndex] = { ...tile, connector: buildType, rotation: 0 };
+      setActions(prev => [...prev, { timestampMs: Date.now() - startTime, actionType: 'PLACE', q, r, param: buildType }]);
     } else {
-      // Rotate connector
+      // Same connector type, rotate it
       const nextRotation = ((tile.rotation + 1) % 6) as HexDirection;
-      if (nextRotation === 0) {
-        // Rotated fully: cycle connector type
-        const nextTypes: Record<ConnectorType, ConnectorType> = {
-          'STRAIGHT': 'CURVE_60',
-          'CURVE_60': 'CURVE_120',
-          'CURVE_120': 'SPLIT_Y',
-          'SPLIT_Y': 'NONE',
-          'NONE': 'NONE'
-        };
-        const nextType = nextTypes[tile.connector];
-        updated[targetIndex] = { ...tile, connector: nextType, rotation: 0 };
-        if (nextType === 'NONE') {
-          setActions(prev => [...prev, { timestampMs: Date.now() - startTime, actionType: 'DELETE', q, r }]);
-        } else {
-          setActions(prev => [...prev, { timestampMs: Date.now() - startTime, actionType: 'PLACE', q, r, param: nextType }]);
-        }
-      } else {
-        // Rotate current type
-        updated[targetIndex] = { ...tile, rotation: nextRotation };
-        setActions(prev => [...prev, { timestampMs: Date.now() - startTime, actionType: 'ROTATE', q, r, param: nextRotation }]);
-      }
+      updated[targetIndex] = { ...tile, rotation: nextRotation };
+      setActions(prev => [...prev, { timestampMs: Date.now() - startTime, actionType: 'ROTATE', q, r, param: nextRotation }]);
     }
 
     setGrid(updated);
   };
 
-  // Chemical Injector activation
-  const handleChemicalInjector = () => {
+  // Touch Gestures for mobile (Long press to delete/dismantle)
+  const handleTouchStart = (q: number, r: number) => {
+    isLongPressRef.current = false;
+    touchTimerRef.current = setTimeout(() => {
+      isLongPressRef.current = true;
+      handleTileRightClick(q, r);
+      if (navigator.vibrate) {
+        navigator.vibrate(50);
+      }
+    }, 500); // 500ms hold
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchTimerRef.current) {
+      clearTimeout(touchTimerRef.current);
+      touchTimerRef.current = null;
+    }
+    if (isLongPressRef.current) {
+      e.preventDefault(); // Prevent standard click on release
+      e.stopPropagation();
+    }
+  };
+
+  const handleTouchMove = () => {
+    if (touchTimerRef.current) {
+      clearTimeout(touchTimerRef.current);
+      touchTimerRef.current = null;
+    }
+  };
+
+  // Right click handler to instantly delete a connector
+  const handleTileRightClick = (q: number, r: number) => {
     if (gameStatus !== 'PLAYING') return;
 
-    const inventoryInj = profile?.inventory.find(i => i.itemType === 'CHEMICAL_INJECTOR');
-    if (!inventoryInj || inventoryInj.quantity <= 0) {
-      triggerNotification("No Chemical Injectors in inventory!", 'error');
+    const targetIndex = grid.findIndex(t => t.q === q && t.r === r);
+    if (targetIndex === -1) return;
+
+    const tile = grid[targetIndex];
+    if (tile.type === 'BLOCKED' || tile.type === 'INPUT' || tile.type === 'OUTPUT') return;
+    if (tile.connector === 'NONE') return;
+
+    if (tile.isLocked) {
+      triggerNotification("This component is sutured in place.", 'error');
       return;
     }
 
-    setIsFreezeActive(true);
-    // Diagnostic upgrade decreases cooldown / increases injector buffer time
-    const efficiencyUpgrade = profile?.upgrades.find(u => u.upgradeKey === "TOOL_EFFICIENCY");
-    const bonusDuration = efficiencyUpgrade ? efficiencyUpgrade.tier : 0;
-    const duration = 5 + bonusDuration;
-
-    setFreezeTimeRemaining(duration);
-    setActions(prev => [...prev, { timestampMs: Date.now() - startTime, actionType: 'TOOL_INJECTOR', q: -1, r: -1 }]);
-
-    if (profile) {
-      setProfile({
-        ...profile,
-        inventory: profile.inventory.map(i => i.itemType === 'CHEMICAL_INJECTOR' ? { ...i, quantity: i.quantity - 1 } : i)
-      });
-    }
-
-    triggerNotification(`Vitality depletion frozen for ${duration} seconds!`, 'success');
+    const updated = [...grid];
+    updated[targetIndex] = { ...tile, connector: 'NONE', rotation: 0 };
+    setGrid(updated);
+    setActions(prev => [...prev, { timestampMs: Date.now() - startTime, actionType: 'DELETE', q, r }]);
+    triggerNotification("Component deleted.", 'success');
   };
+
+
 
   // Submit level solution to server for validation
   const handleSubmitSolution = async () => {
@@ -622,7 +663,7 @@ export default function App() {
           particleCount: 150,
           spread: 70,
           origin: { y: 0.6 },
-          colors: ['#00ffff', '#cd7f32', '#8b4513']
+          colors: ['#00c2b2', '#cd7f32', '#8b4513']
         });
         setProfile(data.profile);
       } else {
@@ -647,10 +688,152 @@ export default function App() {
     return points.join(' ');
   };
 
+  // Dijkstra pathfinder to find optimal path avoiding BLOCKED tiles
+  const findPathDijkstra = (currentGrid: GridTile[]): { q: number; r: number }[] | null => {
+    const gridMap = new Map<string, GridTile>();
+    let inputNode: GridTile | null = null;
+    let outputNode: GridTile | null = null;
+
+    for (const tile of currentGrid) {
+      gridMap.set(`${tile.q},${tile.r}`, tile);
+      if (tile.type === 'INPUT') inputNode = tile;
+      if (tile.type === 'OUTPUT') outputNode = tile;
+    }
+
+    if (!inputNode || !outputNode) return null;
+
+    interface DijkstraNode {
+      q: number;
+      r: number;
+      dist: number;
+      parent: DijkstraNode | null;
+    }
+
+    const openSet: DijkstraNode[] = [{ q: inputNode.q, r: inputNode.r, dist: 0, parent: null }];
+    const closedSet = new Set<string>();
+    let endNode: DijkstraNode | null = null;
+
+    while (openSet.length > 0) {
+      openSet.sort((a, b) => a.dist - b.dist);
+      const current = openSet.shift()!;
+      const currentKey = `${current.q},${current.r}`;
+
+      if (closedSet.has(currentKey)) continue;
+      closedSet.add(currentKey);
+
+      if (current.q === outputNode.q && current.r === outputNode.r) {
+        endNode = current;
+        break;
+      }
+
+      for (const dir of HEX_DIRECTIONS) {
+        const nextQ = current.q + dir.dq;
+        const nextR = current.r + dir.dr;
+        const nextKey = `${nextQ},${nextR}`;
+
+        if (closedSet.has(nextKey)) continue;
+
+        const neighbor = gridMap.get(nextKey);
+        if (neighbor) {
+          let weight = 1;
+          if (neighbor.type === 'BLOCKED') weight = 10;
+          else if (neighbor.type === 'CORRUPTED') weight = 2;
+
+          const nextDist = current.dist + weight;
+          const existingIndex = openSet.findIndex(n => n.q === nextQ && n.r === nextR);
+
+          if (existingIndex !== -1) {
+            if (openSet[existingIndex].dist > nextDist) {
+              openSet[existingIndex].dist = nextDist;
+              openSet[existingIndex].parent = current;
+            }
+          } else {
+            openSet.push({ q: nextQ, r: nextR, dist: nextDist, parent: current });
+          }
+        }
+      }
+    }
+
+    if (!endNode) return null;
+
+    const path: { q: number; r: number }[] = [];
+    let curr: DijkstraNode | null = endNode;
+    while (curr) {
+      path.push({ q: curr.q, r: curr.r });
+      curr = curr.parent;
+    }
+    path.reverse();
+    return path;
+  };
+
+  const getDirectionIndex = (dq: number, dr: number): number => {
+    for (let i = 0; i < HEX_DIRECTIONS.length; i++) {
+      if (HEX_DIRECTIONS[i].dq === dq && HEX_DIRECTIONS[i].dr === dr) {
+        return i;
+      }
+    }
+    return -1;
+  };
+
+  const getRequiredConnector = (d1: number, d2: number): { connector: ConnectorType, rotation: HexDirection } | null => {
+    if (d1 === -1 || d2 === -1 || d1 === d2) return null;
+    const diff = (d2 - d1 + 6) % 6;
+    if (diff === 3) {
+      return { connector: 'STRAIGHT', rotation: (d1 % 3) as HexDirection };
+    } else if (diff === 1 || diff === 5) {
+      return { connector: 'CURVE_60', rotation: (diff === 1 ? d1 : d2) as HexDirection };
+    } else if (diff === 2 || diff === 4) {
+      return { connector: 'CURVE_120', rotation: (diff === 2 ? d1 : d2) as HexDirection };
+    }
+    return null;
+  };
+
+  // Hint calculations
+  const pathCoords = useMemo(() => {
+    if (!activeLevel || !grid.length) return null;
+    return findPathDijkstra(grid);
+  }, [grid, activeLevel]);
+
+  const hintMap = useMemo(() => {
+    const map = new Map<string, { connector: ConnectorType; rotation: HexDirection }>();
+    if (!activeLevel || !grid.length || !pathCoords || pathCoords.length < 3) return map;
+
+    for (let i = 1; i < pathCoords.length - 1; i++) {
+      const prev = pathCoords[i - 1];
+      const curr = pathCoords[i];
+      const next = pathCoords[i + 1];
+
+      const d1 = getDirectionIndex(prev.q - curr.q, prev.r - curr.r);
+      const d2 = getDirectionIndex(next.q - curr.q, next.r - curr.r);
+
+      const req = getRequiredConnector(d1, d2);
+      if (req) {
+        map.set(`${curr.q},${curr.r}`, req);
+      }
+    }
+    return map;
+  }, [grid, activeLevel, pathCoords]);
+
   return (
-    <div className="flex min-h-screen w-screen items-center justify-center py-8 px-4">
-      {/* High contrast, weathered Punic bronze device framing */}
-      <div className="relative flex h-[860px] w-[390px] flex-col overflow-hidden bg-[#050505] rounded-3xl border-4 border-[#8b4513] shadow-[0_0_35px_rgba(139,69,19,0.3)]">
+    <div className="flex min-h-screen w-screen items-center justify-center bg-[#050505] overflow-hidden select-none touch-manipulation">
+      {/* High contrast, weathered Punic bronze device framing or fullscreen mobile container */}
+      <div 
+        style={isMobile ? {
+          width: '100%',
+          height: '100%',
+          maxHeight: '100dvh',
+          display: 'flex',
+          flexDirection: 'column'
+        } : {
+          transform: `scale(${deviceScale})`,
+          transformOrigin: 'center center',
+          transition: 'transform 0.1s ease-out'
+        }}
+        className={isMobile 
+          ? "relative flex flex-col overflow-hidden bg-[#050505] safe-pb safe-pt" 
+          : "relative flex h-[860px] w-[390px] flex-col overflow-hidden bg-[#050505] rounded-3xl border-4 border-[#8b4513] shadow-[0_0_35px_rgba(139,69,19,0.3)]"
+        }
+      >
         
         {/* Status notification toast */}
         {notification && (
@@ -664,7 +847,7 @@ export default function App() {
         )}
 
         {/* Neoclassical Header Bar */}
-        <div className="flex h-12 items-center justify-between border-b border-[#8b4513]/40 bg-[#0e0e0e] px-4">
+        <div className="flex h-12 items-center justify-between border-b border-[#8b4513]/40 bg-[#0e0e0e] px-4 shrink-0">
           <div className="flex items-center gap-1">
             <Activity className="h-4 w-4 text-[#00ffff] pulse-energy" />
             <span className="font-data-mono text-[10px] text-[#00ffff] cyan-glow">DOCK_STABLE</span>
@@ -679,7 +862,9 @@ export default function App() {
         </div>
 
         {/* View content switch */}
-        <div className="flex-1 overflow-y-auto px-4 py-3 relative">
+        <div className={`flex-1 relative flex flex-col px-4 py-3 ${
+          activeTab === 'CHAMBER' ? 'overflow-hidden' : 'overflow-y-auto'
+        }`}>
           
           {/* VIEW: SPLASH SCREEN */}
           {activeTab === 'SPLASH' && (
@@ -689,9 +874,9 @@ export default function App() {
                 <div className="absolute inset-0 rounded-full border border-[#00ffff]/20 animate-ping" />
                 <svg viewBox="0 0 100 100" className="h-28 w-28 text-[#00ffff] pulse-energy">
                   {/* Tanit logo */}
-                  <circle cx="50" cy="25" r="12" fill="none" stroke="#00ffff" strokeWidth="4" />
-                  <line x1="15" y1="48" x2="85" y2="48" stroke="#00ffff" strokeWidth="4" strokeLinecap="round" />
-                  <path d="M50,48 L15,85 L85,85 Z" fill="none" stroke="#00ffff" strokeWidth="4" strokeLinejoin="round" />
+                  <circle cx="50" cy="25" r="12" fill="none" stroke="#00c2b2" strokeWidth="4" />
+                  <line x1="15" y1="48" x2="85" y2="48" stroke="#00c2b2" strokeWidth="4" strokeLinecap="round" />
+                  <path d="M50,48 L15,85 L85,85 Z" fill="none" stroke="#00c2b2" strokeWidth="4" strokeLinejoin="round" />
                 </svg>
               </div>
 
@@ -764,18 +949,7 @@ export default function App() {
                   </div>
                 </button>
 
-                <button 
-                  onClick={() => setActiveTab('INVENTORY')}
-                  className="flex items-center justify-between border border-[#8b4513]/40 bg-[#1c1b1b] p-4 hover:border-[#00ffff] text-left transition-all duration-200"
-                >
-                  <div className="flex items-center gap-3">
-                    <ShoppingBag className="h-5 w-5 text-amber-600" />
-                    <div>
-                      <h4 className="font-headline-sm text-sm text-white">Sanctuary Inventory</h4>
-                      <p className="font-body-md text-xs text-gray-400">Restock limited scalpel & injector tools</p>
-                    </div>
-                  </div>
-                </button>
+
 
                 <button 
                   onClick={() => setActiveTab('ORACLE')}
@@ -941,7 +1115,7 @@ export default function App() {
               </div>
 
               {/* Hexagonal SVG Grid Render */}
-              <div className="my-2 flex justify-center items-center h-[340px] border border-[#8b4513]/20 bg-[#070707] relative overflow-hidden">
+              <div className="my-1 flex justify-center items-center flex-1 min-h-[220px] max-h-[380px] border border-[#8b4513]/20 bg-[#070707] relative overflow-hidden">
                 
                 {/* Overclock failure modal */}
                 {gameStatus === 'FAILED' && (
@@ -991,159 +1165,262 @@ export default function App() {
                   </div>
                 )}
 
-                <svg viewBox="-30 -30 360 360" className="w-full h-full select-none">
-                  {grid.map((tile) => {
-                    // Coordinates conversion for axial spacing
-                    const hexSize = 27;
-                    const cx = hexSize * 1.5 * tile.q + 40;
-                    const cy = hexSize * Math.sqrt(3) * (tile.r + tile.q / 2) + 40;
-                    
-                    const isConnected = connectedNodes.has(`${tile.q},${tile.r}`);
-                    
-                    // Style coloring based on type
-                    let strokeColor = 'rgba(205,127,50,0.3)'; // base bronze
-                    let fillColor = 'rgba(19,19,19,0.7)';
-                    
-                    if (tile.type === 'INPUT') {
-                      strokeColor = '#00ffff';
-                      fillColor = 'rgba(0,255,255,0.1)';
-                    } else if (tile.type === 'OUTPUT') {
-                      strokeColor = '#00ffff';
-                      fillColor = isPathConnected ? 'rgba(0,255,255,0.15)' : 'rgba(0,255,255,0.03)';
-                    } else if (tile.type === 'BLOCKED') {
-                      strokeColor = '#8b4513';
-                      fillColor = 'rgba(139,69,19,0.2)';
-                    } else if (tile.type === 'CORRUPTED') {
-                      strokeColor = '#ab0b1c';
-                      fillColor = 'rgba(171,11,28,0.1)';
-                    } else if (tile.type === 'SHARD_CACHE') {
-                      strokeColor = '#ffb779';
-                      fillColor = 'rgba(255,183,121,0.05)';
-                    }
+                {(() => {
+                  const size = activeLevel?.width || 5;
+                  const hexSize = 27;
+                  const padding = 35;
+                  const width = hexSize * 1.5 * (size - 1) + hexSize * 2 + padding * 2;
+                  const height = hexSize * Math.sqrt(3) * ((size - 1) * 1.5) + hexSize * 2 + padding * 2;
+                  const maxDim = Math.max(width, height);
+                  const viewBoxString = `-${padding} -${padding} ${maxDim} ${maxDim}`;
+                  return (
+                    <svg viewBox={viewBoxString} className="w-full h-full select-none">
+                      {grid.map((tile) => {
+                        // Coordinates conversion for axial spacing
+                        const cx = hexSize * 1.5 * tile.q + 40;
+                        const cy = hexSize * Math.sqrt(3) * (tile.r + tile.q / 2) + 40;
+                        
+                        const isConnected = connectedNodes.has(`${tile.q},${tile.r}`);
+                        
+                        // Style coloring based on type
+                        let strokeColor = 'rgba(205,127,50,0.3)'; // base bronze
+                        let fillColor = 'rgba(19,19,19,0.7)';
+                        
+                        if (tile.type === 'INPUT') {
+                          strokeColor = '#00c2b2';
+                          fillColor = 'rgba(0,194,178,0.1)';
+                        } else if (tile.type === 'OUTPUT') {
+                          strokeColor = '#00c2b2';
+                          fillColor = isPathConnected ? 'rgba(0,194,178,0.15)' : 'rgba(0,194,178,0.03)';
+                        } else if (tile.type === 'BLOCKED') {
+                          strokeColor = '#8b4513';
+                          fillColor = 'rgba(139,69,19,0.2)';
+                        } else if (tile.type === 'CORRUPTED') {
+                          strokeColor = '#ab0b1c';
+                          fillColor = 'rgba(171,11,28,0.1)';
+                        } else if (tile.type === 'SHARD_CACHE') {
+                          strokeColor = '#ffb779';
+                          fillColor = 'rgba(255,183,121,0.05)';
+                        }
 
-                    if (tile.isLocked) {
-                      strokeColor = '#cd7f32';
-                    }
+                        if (tile.isLocked) {
+                          strokeColor = '#cd7f32';
+                        }
 
-                    // Scalpel selector highlight
-                    if (activeTool === 'SCALPEL' && tile.type === 'BLOCKED') {
-                      strokeColor = '#ff0000';
-                      fillColor = 'rgba(255,0,0,0.2)';
-                    }
+                        return (
+                          <g 
+                            key={`${tile.q},${tile.r}`} 
+                            onClick={() => handleTileClick(tile.q, tile.r)} 
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              handleTileRightClick(tile.q, tile.r);
+                            }}
+                            onTouchStart={() => handleTouchStart(tile.q, tile.r)}
+                            onTouchEnd={handleTouchEnd}
+                            onTouchMove={handleTouchMove}
+                            className="cursor-pointer"
+                          >
+                            {/* Hexagon shape */}
+                            <polygon 
+                              points={drawHexPath(cx, cy, hexSize)} 
+                              fill={fillColor} 
+                              stroke={strokeColor} 
+                              strokeWidth={tile.isLocked ? 2 : 1}
+                            />
 
-                    // Suture selector highlight
-                    if (activeTool === 'SUTURE' && tile.connector !== 'NONE' && !tile.isLocked) {
-                      strokeColor = '#cd7f32';
-                      fillColor = 'rgba(205,127,50,0.15)';
-                    }
+                            {/* Ghost/Hint connector overlay */}
+                            {showHint && (() => {
+                              const hintVal = hintMap.get(`${tile.q},${tile.r}`);
+                              if (!hintVal || (tile.connector === hintVal.connector && tile.rotation === hintVal.rotation)) return null;
 
-                    return (
-                      <g key={`${tile.q},${tile.r}`} onClick={() => handleTileClick(tile.q, tile.r)} className="cursor-pointer">
-                        {/* Hexagon shape */}
-                        <polygon 
-                          points={drawHexPath(cx, cy, hexSize)} 
-                          fill={fillColor} 
-                          stroke={strokeColor} 
-                          strokeWidth={tile.isLocked ? 2 : 1}
-                        />
+                              return (
+                                <g transform={`rotate(${hintVal.rotation * 60}, ${cx}, ${cy})`} pointerEvents="none" opacity="0.4">
+                                  {/* Straight: N-S */}
+                                  {hintVal.connector === 'STRAIGHT' && (
+                                    <line 
+                                      x1={cx} y1={cy - hexSize} 
+                                      x2={cx} y2={cy + hexSize} 
+                                      stroke="#00c2b2" 
+                                      strokeWidth="3.5" 
+                                      strokeLinecap="round" 
+                                      strokeDasharray="2,2"
+                                    />
+                                  )}
 
-                        {/* Node Label details */}
-                        {tile.type === 'INPUT' && (
-                          <text x={cx} y={cy + 4} fill="#00ffff" textAnchor="middle" className="font-label-caps" fontSize="8">STEM</text>
-                        )}
-                        {tile.type === 'OUTPUT' && (
-                          <text x={cx} y={cy + 4} fill="#00ffff" textAnchor="middle" className="font-label-caps" fontSize="8">ORGAN</text>
-                        )}
-                        {tile.type === 'BLOCKED' && (
-                          <text x={cx} y={cy + 4} fill="#8b4513" textAnchor="middle" className="font-headline-sm" fontSize="16">☠</text>
-                        )}
-                        {tile.type === 'CORRUPTED' && !isConnected && (
-                          <circle cx={cx} cy={cy} r="4" fill="#ab0b1c" className="animate-pulse" />
-                        )}
-                        {tile.type === 'SHARD_CACHE' && (
-                          <text x={cx} y={cy + 4} fill="#ffb779" textAnchor="middle" fontSize="10">◆</text>
-                        )}
+                                  {/* 60 deg: N to NE */}
+                                  {hintVal.connector === 'CURVE_60' && (
+                                    <path 
+                                      d={`M ${cx} ${cy - hexSize} Q ${cx + 10} ${cy - 10} ${cx + hexSize * Math.cos(-Math.PI/6)} ${cy + hexSize * Math.sin(-Math.PI/6)}`} 
+                                      fill="none" 
+                                      stroke="#00c2b2" 
+                                      strokeWidth="3.5" 
+                                      strokeLinecap="round"
+                                      strokeDasharray="2,2"
+                                    />
+                                  )}
 
-                        {/* Connector layout lines */}
-                        {tile.connector !== 'NONE' && (
-                          <g transform={`rotate(${tile.rotation * 60}, ${cx}, ${cy})`}>
-                            
-                            {/* Straight: N-S */}
-                            {tile.connector === 'STRAIGHT' && (
-                              <line 
-                                x1={cx} y1={cy - hexSize} 
-                                x2={cx} y2={cy + hexSize} 
-                                stroke={isConnected ? '#00ffff' : '#cd7f32'} 
-                                strokeWidth="4" 
-                                strokeLinecap="round" 
-                                className={isConnected ? "pulse-energy" : ""}
-                              />
+                                  {/* 120 deg: N to SE */}
+                                  {hintVal.connector === 'CURVE_120' && (
+                                    <path 
+                                      d={`M ${cx} ${cy - hexSize} Q ${cx + 5} ${cy + 5} ${cx + hexSize * Math.cos(Math.PI/6)} ${cy + hexSize * Math.sin(Math.PI/6)}`} 
+                                      fill="none" 
+                                      stroke="#00c2b2" 
+                                      strokeWidth="3.5" 
+                                      strokeLinecap="round"
+                                      strokeDasharray="2,2"
+                                    />
+                                  )}
+
+                                  {/* Split-Y: Inlets N, SE, SW */}
+                                  {hintVal.connector === 'SPLIT_Y' && (
+                                    <g>
+                                      <line 
+                                        x1={cx} y1={cy} 
+                                        x2={cx} y2={cy - hexSize} 
+                                        stroke="#00c2b2" 
+                                        strokeWidth="3.5" 
+                                        strokeLinecap="round"
+                                        strokeDasharray="2,2"
+                                      />
+                                      <line 
+                                        x1={cx} y1={cy} 
+                                        x2={cx + hexSize * Math.cos(Math.PI/6)} y2={cy + hexSize * Math.sin(Math.PI/6)} 
+                                        stroke="#00c2b2" 
+                                        strokeWidth="3.5" 
+                                        strokeLinecap="round"
+                                        strokeDasharray="2,2"
+                                      />
+                                      <line 
+                                        x1={cx} y1={cy} 
+                                        x2={cx + hexSize * Math.cos(5*Math.PI/6)} y2={cy + hexSize * Math.sin(5*Math.PI/6)} 
+                                        stroke="#00c2b2" 
+                                        strokeWidth="3.5" 
+                                        strokeLinecap="round"
+                                        strokeDasharray="2,2"
+                                      />
+                                    </g>
+                                  )}
+                                </g>
+                              );
+                            })()}
+
+                            {/* Node Label details */}
+                            {tile.type === 'INPUT' && (
+                              <text x={cx} y={cy + 4} fill="#00c2b2" textAnchor="middle" className="font-label-caps" fontSize="8">STEM</text>
+                            )}
+                            {tile.type === 'OUTPUT' && (
+                              <text x={cx} y={cy + 4} fill="#00c2b2" textAnchor="middle" className="font-label-caps" fontSize="8">ORGAN</text>
+                            )}
+                            {tile.type === 'BLOCKED' && (
+                              <text x={cx} y={cy + 4} fill="#8b4513" textAnchor="middle" className="font-headline-sm" fontSize="16">☠</text>
+                            )}
+                            {tile.type === 'CORRUPTED' && !isConnected && (
+                              <circle cx={cx} cy={cy} r="4" fill="#ab0b1c" className="animate-pulse" />
+                            )}
+                            {tile.type === 'SHARD_CACHE' && (
+                              <text x={cx} y={cy + 4} fill="#ffb779" textAnchor="middle" fontSize="10">◆</text>
                             )}
 
-                            {/* 60 deg: N to NE */}
-                            {tile.connector === 'CURVE_60' && (
-                              <path 
-                                d={`M ${cx} ${cy - hexSize} Q ${cx + 10} ${cy - 10} ${cx + hexSize * Math.cos(-Math.PI/6)} ${cy + hexSize * Math.sin(-Math.PI/6)}`} 
-                                fill="none" 
-                                stroke={isConnected ? '#00ffff' : '#cd7f32'} 
-                                strokeWidth="4" 
-                                strokeLinecap="round"
-                                className={isConnected ? "pulse-energy" : ""}
-                              />
-                            )}
+                            {/* Connector layout lines */}
+                            {tile.connector !== 'NONE' && (
+                              <g transform={`rotate(${tile.rotation * 60}, ${cx}, ${cy})`}>
+                                
+                                {/* Straight: N-S */}
+                                {tile.connector === 'STRAIGHT' && (
+                                  <line 
+                                    x1={cx} y1={cy - hexSize} 
+                                    x2={cx} y2={cy + hexSize} 
+                                    stroke={isConnected ? '#00c2b2' : '#cd7f32'} 
+                                    strokeWidth="4" 
+                                    strokeLinecap="round" 
+                                    className={isConnected ? "pulse-energy" : ""}
+                                  />
+                                )}
 
-                            {/* 120 deg: N to SE */}
-                            {tile.connector === 'CURVE_120' && (
-                              <path 
-                                d={`M ${cx} ${cy - hexSize} Q ${cx + 5} ${cy + 5} ${cx + hexSize * Math.cos(Math.PI/6)} ${cy + hexSize * Math.sin(Math.PI/6)}`} 
-                                fill="none" 
-                                stroke={isConnected ? '#00ffff' : '#cd7f32'} 
-                                strokeWidth="4" 
-                                strokeLinecap="round"
-                                className={isConnected ? "pulse-energy" : ""}
-                              />
-                            )}
+                                {/* 60 deg: N to NE */}
+                                {tile.connector === 'CURVE_60' && (
+                                  <path 
+                                    d={`M ${cx} ${cy - hexSize} Q ${cx + 10} ${cy - 10} ${cx + hexSize * Math.cos(-Math.PI/6)} ${cy + hexSize * Math.sin(-Math.PI/6)}`} 
+                                    fill="none" 
+                                    stroke={isConnected ? '#00c2b2' : '#cd7f32'} 
+                                    strokeWidth="4" 
+                                    strokeLinecap="round"
+                                    className={isConnected ? "pulse-energy" : ""}
+                                  />
+                                )}
 
-                            {/* Split-Y: Inlets N, SE, SW */}
-                            {tile.connector === 'SPLIT_Y' && (
-                              <g>
-                                <line 
-                                  x1={cx} y1={cy} 
-                                  x2={cx} y2={cy - hexSize} 
-                                  stroke={isConnected ? '#00ffff' : '#cd7f32'} 
-                                  strokeWidth="4" 
-                                  strokeLinecap="round"
-                                  className={isConnected ? "pulse-energy" : ""}
-                                />
-                                <line 
-                                  x1={cx} y1={cy} 
-                                  x2={cx + hexSize * Math.cos(Math.PI/6)} y2={cy + hexSize * Math.sin(Math.PI/6)} 
-                                  stroke={isConnected ? '#00ffff' : '#cd7f32'} 
-                                  strokeWidth="4" 
-                                  strokeLinecap="round"
-                                  className={isConnected ? "pulse-energy" : ""}
-                                />
-                                <line 
-                                  x1={cx} y1={cy} 
-                                  x2={cx + hexSize * Math.cos(5*Math.PI/6)} y2={cy + hexSize * Math.sin(5*Math.PI/6)} 
-                                  stroke={isConnected ? '#00ffff' : '#cd7f32'} 
-                                  strokeWidth="4" 
-                                  strokeLinecap="round"
-                                  className={isConnected ? "pulse-energy" : ""}
-                                />
+                                {/* 120 deg: N to SE */}
+                                {tile.connector === 'CURVE_120' && (
+                                  <path 
+                                    d={`M ${cx} ${cy - hexSize} Q ${cx + 5} ${cy + 5} ${cx + hexSize * Math.cos(Math.PI/6)} ${cy + hexSize * Math.sin(Math.PI/6)}`} 
+                                    fill="none" 
+                                    stroke={isConnected ? '#00c2b2' : '#cd7f32'} 
+                                    strokeWidth="4" 
+                                    strokeLinecap="round"
+                                    className={isConnected ? "pulse-energy" : ""}
+                                  />
+                                )}
+
+                                {/* Split-Y: Inlets N, SE, SW */}
+                                {tile.connector === 'SPLIT_Y' && (
+                                  <g>
+                                    <line 
+                                      x1={cx} y1={cy} 
+                                      x2={cx} y2={cy - hexSize} 
+                                      stroke={isConnected ? '#00c2b2' : '#cd7f32'} 
+                                      strokeWidth="4" 
+                                      strokeLinecap="round"
+                                      className={isConnected ? "pulse-energy" : ""}
+                                    />
+                                    <line 
+                                      x1={cx} y1={cy} 
+                                      x2={cx + hexSize * Math.cos(Math.PI/6)} y2={cy + hexSize * Math.sin(Math.PI/6)} 
+                                      stroke={isConnected ? '#00c2b2' : '#cd7f32'} 
+                                      strokeWidth="4" 
+                                      strokeLinecap="round"
+                                      className={isConnected ? "pulse-energy" : ""}
+                                    />
+                                    <line 
+                                      x1={cx} y1={cy} 
+                                      x2={cx + hexSize * Math.cos(5*Math.PI/6)} y2={cy + hexSize * Math.sin(5*Math.PI/6)} 
+                                      stroke={isConnected ? '#00c2b2' : '#cd7f32'} 
+                                      strokeWidth="4" 
+                                      strokeLinecap="round"
+                                      className={isConnected ? "pulse-energy" : ""}
+                                    />
+                                  </g>
+                                )}
+
                               </g>
                             )}
-
+                            {/* Lock indicator */}
+                            {tile.isLocked && (
+                              <circle cx={cx + 10} cy={cy - 10} r="3" fill="#cd7f32" />
+                            )}
                           </g>
-                        )}
-                        {/* Lock indicator */}
-                        {tile.isLocked && (
-                          <circle cx={cx + 10} cy={cy - 10} r="3" fill="#cd7f32" />
-                        )}
-                      </g>
-                    );
-                  })}
-                </svg>
+                        );
+                      })}
+
+                      {showHint && pathCoords && pathCoords.length >= 2 && (
+                        <path
+                          d={pathCoords.map((coord, idx) => {
+                            const cx = 27 * 1.5 * coord.q + 40;
+                            const cy = 27 * Math.sqrt(3) * (coord.r + coord.q / 2) + 40;
+                            return `${idx === 0 ? 'M' : 'L'} ${cx} ${cy}`;
+                          }).join(' ')}
+                          fill="none"
+                          stroke="#00c2b2"
+                          strokeWidth="2.5"
+                          strokeDasharray="4,4"
+                          strokeLinecap="round"
+                          opacity="0.6"
+                          className="pulse-energy"
+                          pointerEvents="none"
+                        />
+                      )}
+                    </svg>
+                  );
+                })()}
               </div>
 
               {/* Chemical injector decay freeze timer display */}
@@ -1154,48 +1431,104 @@ export default function App() {
                 </div>
               )}
 
+              {/* Connector Assembly (Build Selector) */}
+              <div className="flex flex-col gap-1 mb-2 border border-[#8b4513]/20 p-2 bg-[#0e0e0e]/60 rounded">
+                <div className="font-label-caps text-[8px] text-[#cd7f32] tracking-wider text-center">Selected Connector Blueprint</div>
+                <div className="grid grid-cols-4 gap-1">
+                  {(['STRAIGHT', 'CURVE_60', 'CURVE_120', 'SPLIT_Y'] as ConnectorType[]).map((type) => {
+                    const labelMap: Record<ConnectorType, string> = {
+                      'STRAIGHT': 'Straight',
+                      'CURVE_60': 'Curve 60°',
+                      'CURVE_120': 'Wide Arc',
+                      'SPLIT_Y': 'Split Y',
+                      'NONE': 'None'
+                    };
+                    const isSelected = buildType === type;
+                    return (
+                      <button
+                        key={type}
+                        onClick={() => {
+                          setBuildType(type);
+                        }}
+                        className={`py-1.5 px-1 border font-label-caps text-[8px] text-center flex flex-col items-center justify-center gap-1 transition-all relative ${
+                          isSelected 
+                            ? 'bg-[#00ffff]/10 border-[#00ffff] text-[#00ffff] cyan-glow font-bold' 
+                            : 'bg-[#131313] border-[#8b4513]/30 text-gray-400 hover:text-white hover:border-[#cd7f32]/50'
+                        }`}
+                      >
+                        {isSelected && (
+                          <span className="absolute top-1 right-1 flex h-1.5 w-1.5 rounded-full bg-[#00c2b2] animate-pulse" />
+                        )}
+                        {type === 'STRAIGHT' && (
+                          <svg width="12" height="12" viewBox="0 0 16 16" className="opacity-80">
+                            <line x1="8" y1="2" x2="8" y2="14" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+                          </svg>
+                        )}
+                        {type === 'CURVE_60' && (
+                          <svg width="12" height="12" viewBox="0 0 16 16" className="opacity-80">
+                            <path d="M 8 2 Q 12 6 13 11" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+                          </svg>
+                        )}
+                        {type === 'CURVE_120' && (
+                          <svg width="12" height="12" viewBox="0 0 16 16" className="opacity-80">
+                            <path d="M 8 2 Q 8 8 13 8" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+                          </svg>
+                        )}
+                        {type === 'SPLIT_Y' && (
+                          <svg width="12" height="12" viewBox="0 0 16 16" className="opacity-80">
+                            <line x1="8" y1="2" x2="8" y2="8" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+                            <line x1="8" y1="8" x2="13" y2="12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+                            <line x1="8" y1="8" x2="3" y2="12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+                          </svg>
+                        )}
+                        <span>{labelMap[type]}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                
+                {/* Active Blueprint Preview Details Panel */}
+                <div className="mt-1.5 p-1.5 border border-[#8b4513]/25 bg-[#050505] rounded flex items-center justify-between text-[8px] font-data-mono text-gray-400">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[#00c2b2] font-bold">▶ ACTIVE:</span>
+                    <span className="text-white font-bold uppercase">
+                      {
+                        {
+                          'STRAIGHT': 'Straight Line',
+                          'CURVE_60': '60° Curve',
+                          'CURVE_120': 'Wide Arc',
+                          'SPLIT_Y': 'Split Y-Joint',
+                          'NONE': 'None'
+                        }[buildType]
+                      }
+                    </span>
+                  </div>
+                  <div className="text-[#cd7f32] font-bold">
+                    +{buildType === 'STRAIGHT' ? 10 : buildType === 'CURVE_60' ? 15 : buildType === 'CURVE_120' ? 20 : buildType === 'SPLIT_Y' ? 30 : 0} MS/Ph
+                  </div>
+                </div>
+              </div>
+
               {/* Tool Hotbar & Actions */}
               <div className="flex flex-col gap-2">
-                <div className="grid grid-cols-3 gap-2">
+                {showHint ? (
                   <button 
-                    onClick={() => setActiveTool(activeTool === 'SCALPEL' ? null : 'SCALPEL')}
-                    className={`flex flex-col items-center justify-center p-2 border font-label-caps text-[9px] relative ${
-                      activeTool === 'SCALPEL' 
-                        ? 'bg-[#ab0b1c]/10 border-[#ab0b1c] text-[#ffb4ab]' 
-                        : 'bg-[#131313] border-[#8b4513]/40 text-[#cd7f32]'
-                    }`}
+                    onClick={() => setShowHint(false)}
+                    className="bg-[#00ffff]/10 border border-[#00ffff] p-2.5 text-[#00ffff] font-label-caps text-[9px] tracking-wider hover:bg-[#00ffff]/20 transition-all duration-300 rounded active:scale-95 text-center"
                   >
-                    <span>Laser Scalpel</span>
-                    <span className="font-data-mono text-[8px] mt-1">
-                      ({profile?.inventory.find(i => i.itemType === 'LASER_SCALPEL')?.quantity || 0} left)
+                    Deactivate Diagnostic Guide
+                  </button>
+                ) : (
+                  <button 
+                    onClick={handleUseHint}
+                    className="bg-[#131313] border border-[#8b4513]/40 p-2.5 text-[#cd7f32] font-label-caps text-[9px] tracking-wider hover:text-white hover:border-[#cd7f32] transition-all duration-300 rounded active:scale-95 flex justify-center items-center gap-2"
+                  >
+                    <span>Activate Diagnostic Guide</span>
+                    <span className="font-data-mono text-[8px] text-[#ffb779]">
+                      ({isHintUnlockedForRun ? "FREE" : "15 Bio-Shards"})
                     </span>
                   </button>
-
-                  <button 
-                    onClick={() => setActiveTool(activeTool === 'SUTURE' ? null : 'SUTURE')}
-                    className={`flex flex-col items-center justify-center p-2 border font-label-caps text-[9px] relative ${
-                      activeTool === 'SUTURE' 
-                        ? 'bg-[#cd7f32]/10 border-[#cd7f32] text-[#cd7f32]' 
-                        : 'bg-[#131313] border-[#8b4513]/40 text-[#cd7f32]'
-                    }`}
-                  >
-                    <span>Suture Lock</span>
-                    <span className="font-data-mono text-[8px] mt-1">
-                      ({profile?.inventory.find(i => i.itemType === 'SUTURE_NEEDLE')?.quantity || 0} left)
-                    </span>
-                  </button>
-
-                  <button 
-                    onClick={handleChemicalInjector}
-                    disabled={isFreezeActive}
-                    className="flex flex-col items-center justify-center p-2 border border-[#8b4513]/40 bg-[#131313] font-label-caps text-[9px] text-[#cd7f32] disabled:opacity-50"
-                  >
-                    <span>Injector (Freeze)</span>
-                    <span className="font-data-mono text-[8px] mt-1">
-                      ({profile?.inventory.find(i => i.itemType === 'CHEMICAL_INJECTOR')?.quantity || 0} left)
-                    </span>
-                  </button>
-                </div>
+                )}
 
                 {isPathConnected ? (
                   <button 
@@ -1269,51 +1602,7 @@ export default function App() {
             </div>
           )}
 
-          {/* VIEW: SANCTUARY INVENTORY */}
-          {activeTab === 'INVENTORY' && (
-            <div className="flex flex-col gap-4 py-2">
-              <div className="flex items-center justify-between">
-                <h3 className="font-headline-sm text-white">Surgical Inventory Requisitions</h3>
-                <button onClick={() => setActiveTab('DASHBOARD')} className="font-label-caps text-[10px] text-gray-400 hover:text-white">Back</button>
-              </div>
 
-              {[
-                { type: 'LASER_SCALPEL', name: 'Laser Scalpel', desc: 'Clears sandstone and calcified bone blockages on the neural grid.', cost: 10 },
-                { type: 'SUTURE_NEEDLE', name: 'Suture Needle', desc: 'Locks a biomechanical connector piece in place permanently.', cost: 10 },
-                { type: 'CHEMICAL_INJECTOR', name: 'Chemical Injector', desc: 'Freezes subject vitality degradation for 5+ seconds.', cost: 25 }
-              ].map((tool) => {
-                const currentQty = profile?.inventory.find(i => i.itemType === tool.type)?.quantity || 0;
-                
-                return (
-                  <div key={tool.type} className="border border-[#8b4513]/40 p-4 glass-panel">
-                    <div className="flex justify-between items-start mb-1">
-                      <div>
-                        <h4 className="font-headline-sm text-sm text-white">{tool.name}</h4>
-                        <p className="font-data-mono text-[9px] text-gray-400">CURRENT STOCK: {currentQty}</p>
-                      </div>
-                      <span className="font-data-mono text-xs text-[#cd7f32]">{tool.cost} ◆ / unit</span>
-                    </div>
-                    <p className="font-body-md text-xs text-gray-400 mb-3">{tool.desc}</p>
-
-                    <div className="flex gap-2">
-                      <button 
-                        onClick={() => handleBuyTool(tool.type, 1)}
-                        className="flex-1 bg-[#8b4513]/40 border border-[#cd7f32] p-1 font-label-caps text-[9px] text-white hover:border-[#00ffff] hover:text-[#00ffff]"
-                      >
-                        Requisition x1
-                      </button>
-                      <button 
-                        onClick={() => handleBuyTool(tool.type, 5)}
-                        className="flex-1 bg-[#8b4513]/40 border border-[#cd7f32] p-1 font-label-caps text-[9px] text-white hover:border-[#00ffff] hover:text-[#00ffff]"
-                      >
-                        Requisition x5
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
 
           {/* VIEW: ORACLE DECREES */}
           {activeTab === 'ORACLE' && (
@@ -1372,15 +1661,6 @@ export default function App() {
               <KeyRound className="h-4.5 w-4.5" />
               <span>UPGRADES</span>
             </button>
-            <button 
-              onClick={() => setActiveTab('INVENTORY')} 
-              className={`flex flex-col items-center gap-0.5 font-label-caps text-[8px] ${
-                activeTab === 'INVENTORY' ? 'text-[#00ffff]' : 'text-gray-500'
-              }`}
-            >
-              <ShoppingBag className="h-4.5 w-4.5" />
-              <span>STORE</span>
-            </button>
           </div>
         )}
 
@@ -1399,11 +1679,11 @@ export default function App() {
                 {/* Tour step text */}
                 <p className="font-body-md text-xs text-white leading-relaxed">
                   {tourStep === 0 && "Operative, welcome to the Cognitive Dock of Carthage. I am the Blind Oracle. Our legions bleed, and their neuro-networks decay. Your duty is to splice their cognitive matrices to keep them functional. Note your Bio-Shards (◆) in the header—it is your bio-energy. Let us inspect the sectors."}
-                  {tourStep === 1 && "This is the Neural Map. Carthage is split into three sectors. Each sector's stability is vital; failures drop stability, which speeds up decay rates. Cleansing stability requires Bio-Shards. Let us examine our tool inventory."}
-                  {tourStep === 2 && "In the Requisitions Store, you buy Laser Scalpels, Suture Needles, and Chemical Injectors using Bio-Shards. In the Upgrades Temple, you enhance your neural load buffers. Let us begin your first neuro-splicing surgery."}
+                  {tourStep === 1 && "This is the Neural Map. Carthage is split into three sectors. Each sector's stability is vital; failures drop stability, which speeds up decay rates. Cleansing stability requires Bio-Shards. Let us examine our upgrades."}
+                  {tourStep === 2 && "At the Temple of Tanit, you can upgrade your cyber-rig's max load buffer and diagnostic precision using Bio-Shards. Let us begin your first neuro-splicing surgery."}
                   {tourStep === 3 && "We are inside the Surgery Chamber. Look at the grid. Your objective is to connect the STEM node (top-left) to the ORGAN node (bottom-right) using connectors. Let us see how we route pathways."}
-                  {tourStep === 4 && "Tapping an empty tile places a Straight path. Tapping it again rotates it. Keep tapping to cycle other connector shapes (Curves, Split-Y). Note: every connector and rotation increases Neural Load. Exceeding the overclock threshold terminates the patient!"}
-                  {tourStep === 5 && "Biological tissue decays in real-time, reducing Vitality. If Vitality hits 0%, the patient dies! Use Chemical Injectors to freeze decay, and Laser Scalpels to clear blocked (☠) tiles. I have pre-aligned the grid. Click Next to make the final link."}
+                  {tourStep === 4 && "Tapping an empty tile places the selected connector blueprint. Note: every connector and rotation increases Neural Load. Exceeding the overclock threshold terminates the patient!"}
+                  {tourStep === 5 && "Biological tissue decays in real-time, reducing Vitality. If Vitality hits 0%, the patient dies! Budget your Neural Load and navigate around blocks. I have pre-aligned the grid. Click Next to make the final link."}
                 </p>
 
                 {/* Tour controls */}
@@ -1425,7 +1705,7 @@ export default function App() {
                           setTourStep(prevStep);
                           if (prevStep === 0) setActiveTab('DASHBOARD');
                           if (prevStep === 1) setActiveTab('MAP');
-                          if (prevStep === 2) setActiveTab('INVENTORY');
+                          if (prevStep === 2) setActiveTab('UPGRADES');
                         }}
                         className="bg-gray-900 border border-gray-700 px-3 py-1 font-label-caps text-[9px] text-white hover:border-white"
                       >
@@ -1436,7 +1716,7 @@ export default function App() {
                       onClick={() => {
                         const nextStep = tourStep + 1;
                         if (nextStep === 1) setActiveTab('MAP');
-                        if (nextStep === 2) setActiveTab('INVENTORY');
+                        if (nextStep === 2) setActiveTab('UPGRADES');
                         if (nextStep === 3) {
                           const lvl1 = levels.find(l => l.levelNumber === 1);
                           if (lvl1) {

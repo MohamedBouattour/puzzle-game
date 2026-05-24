@@ -119,7 +119,7 @@ export function validateSolution(
   }
 
   const rotationsCount = snapshot.actions.filter(a => a.actionType === 'ROTATE').length;
-  calculatedLoad += rotationsCount * 5;
+  calculatedLoad += rotationsCount * 2;
 
   if (calculatedLoad !== snapshot.finalNeuralLoad) {
     return { isValid: false, reason: `Neural Load mismatch. Reported: ${snapshot.finalNeuralLoad}, Calculated: ${calculatedLoad}` };

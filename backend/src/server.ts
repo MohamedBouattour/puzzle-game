@@ -23,10 +23,10 @@ async function seedDefaultData() {
         seed: 101,
         width: 5,
         height: 5,
-        maxNeuralLoad: 120,
-        baseDecayRate: 1.5,
-        allowedScalpels: 2,
-        allowedSutures: 3,
+        maxNeuralLoad: 200,
+        baseDecayRate: 0.15,
+        allowedScalpels: 3,
+        allowedSutures: 4,
         isShifting: false
       },
       {
@@ -35,10 +35,10 @@ async function seedDefaultData() {
         seed: 102,
         width: 5,
         height: 5,
-        maxNeuralLoad: 140,
-        baseDecayRate: 1.8,
-        allowedScalpels: 2,
-        allowedSutures: 3,
+        maxNeuralLoad: 200,
+        baseDecayRate: 0.20,
+        allowedScalpels: 3,
+        allowedSutures: 4,
         isShifting: false
       },
       {
@@ -47,8 +47,56 @@ async function seedDefaultData() {
         seed: 103,
         width: 5,
         height: 5,
-        maxNeuralLoad: 160,
-        baseDecayRate: 2.0,
+        maxNeuralLoad: 200,
+        baseDecayRate: 0.22,
+        allowedScalpels: 3,
+        allowedSutures: 4,
+        isShifting: false
+      },
+      {
+        sectorId: "sector_01",
+        levelNumber: 4,
+        seed: 104,
+        width: 5,
+        height: 5,
+        maxNeuralLoad: 200,
+        baseDecayRate: 0.25,
+        allowedScalpels: 3,
+        allowedSutures: 4,
+        isShifting: false
+      },
+      {
+        sectorId: "sector_01",
+        levelNumber: 5,
+        seed: 105,
+        width: 5,
+        height: 5,
+        maxNeuralLoad: 220,
+        baseDecayRate: 0.28,
+        allowedScalpels: 3,
+        allowedSutures: 4,
+        isShifting: false
+      },
+      {
+        sectorId: "sector_01",
+        levelNumber: 6,
+        seed: 106,
+        width: 5,
+        height: 5,
+        maxNeuralLoad: 220,
+        baseDecayRate: 0.32,
+        allowedScalpels: 3,
+        allowedSutures: 4,
+        isShifting: false
+      },
+      {
+        sectorId: "sector_01",
+        levelNumber: 7,
+        seed: 107,
+        width: 5,
+        height: 5,
+        maxNeuralLoad: 240,
+        baseDecayRate: 0.36,
         allowedScalpels: 3,
         allowedSutures: 4,
         isShifting: false
@@ -56,36 +104,36 @@ async function seedDefaultData() {
       // Sector 2: Byrsa Citadel (7x7 Grid)
       {
         sectorId: "sector_02",
-        levelNumber: 4,
+        levelNumber: 8,
         seed: 201,
         width: 7,
         height: 7,
-        maxNeuralLoad: 240,
-        baseDecayRate: 2.2,
+        maxNeuralLoad: 280,
+        baseDecayRate: 0.60,
         allowedScalpels: 3,
         allowedSutures: 4,
         isShifting: false
       },
       {
         sectorId: "sector_02",
-        levelNumber: 5,
+        levelNumber: 9,
         seed: 202,
         width: 7,
         height: 7,
-        maxNeuralLoad: 260,
-        baseDecayRate: 2.5,
+        maxNeuralLoad: 300,
+        baseDecayRate: 0.70,
         allowedScalpels: 3,
         allowedSutures: 4,
         isShifting: false
       },
       {
         sectorId: "sector_02",
-        levelNumber: 6,
+        levelNumber: 10,
         seed: 203,
         width: 7,
         height: 7,
-        maxNeuralLoad: 280,
-        baseDecayRate: 2.8,
+        maxNeuralLoad: 320,
+        baseDecayRate: 0.80,
         allowedScalpels: 4,
         allowedSutures: 5,
         isShifting: false
@@ -93,36 +141,48 @@ async function seedDefaultData() {
       // Sector 3: The Oracle Core (9x9 Grid)
       {
         sectorId: "sector_03",
-        levelNumber: 7,
+        levelNumber: 11,
         seed: 301,
         width: 9,
         height: 9,
-        maxNeuralLoad: 420,
-        baseDecayRate: 3.0,
+        maxNeuralLoad: 450,
+        baseDecayRate: 1.10,
         allowedScalpels: 4,
         allowedSutures: 5,
         isShifting: true
       },
       {
         sectorId: "sector_03",
-        levelNumber: 8,
+        levelNumber: 12,
         seed: 302,
         width: 9,
         height: 9,
-        maxNeuralLoad: 450,
-        baseDecayRate: 3.3,
+        maxNeuralLoad: 480,
+        baseDecayRate: 1.20,
         allowedScalpels: 4,
         allowedSutures: 5,
         isShifting: true
       },
       {
         sectorId: "sector_03",
-        levelNumber: 9,
+        levelNumber: 13,
         seed: 303,
         width: 9,
         height: 9,
         maxNeuralLoad: 500,
-        baseDecayRate: 3.6,
+        baseDecayRate: 1.30,
+        allowedScalpels: 4,
+        allowedSutures: 5,
+        isShifting: true
+      },
+      {
+        sectorId: "sector_03",
+        levelNumber: 14,
+        seed: 304,
+        width: 9,
+        height: 9,
+        maxNeuralLoad: 550,
+        baseDecayRate: 1.40,
         allowedScalpels: 5,
         allowedSutures: 6,
         isShifting: true
@@ -348,6 +408,31 @@ app.post('/api/inventory/buy', async (req, res) => {
   }
 });
 
+// 4.5 Deduct shards for using diagnostic hint
+app.post('/api/hint/use', async (req, res) => {
+  try {
+    const profile = await prisma.userProfile.findUnique({
+      where: { username: "cabanist_1" }
+    });
+
+    if (!profile) return res.status(404).json({ error: "Profile not found" });
+
+    if (profile.bioShards < 15) {
+      return res.status(400).json({ error: "Insufficient Bio-Shards" });
+    }
+
+    await prisma.userProfile.update({
+      where: { id: profile.id },
+      data: { bioShards: profile.bioShards - 15 }
+    });
+
+    const updatedProfile = await getProfilePayload(profile.id);
+    res.json({ message: "Hint unlocked", profile: updatedProfile });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 5. Restore stability to a sector
 app.post('/api/stability/cleanse', async (req, res) => {
   const { sectorId } = req.body;
@@ -478,9 +563,9 @@ app.post('/api/level/validate', async (req, res) => {
     // If successfully clearing the final level of Sector 1 (level 3), unlock Sector 2.
     // If successfully clearing the final level of Sector 2 (level 6), unlock Sector 3.
     let unlocked = profile.unlockedSectors;
-    if (levelConfig.levelNumber === 3 && !unlocked.includes("sector_02")) {
+    if (levelConfig.levelNumber === 7 && !unlocked.includes("sector_02")) {
       unlocked += ",sector_02";
-    } else if (levelConfig.levelNumber === 6 && !unlocked.includes("sector_03")) {
+    } else if (levelConfig.levelNumber === 10 && !unlocked.includes("sector_03")) {
       unlocked += ",sector_03";
     }
 

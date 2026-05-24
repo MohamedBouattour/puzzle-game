@@ -1,0 +1,92 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model UserProfile {
+  id              String             @id @default(uuid())
+  username        String             @unique
+  bioShards       Int                @default(200) // Default starting Bio-Shards
+  activeSectorId  String             @default("sector_01")
+  unlockedSectors String             @default("sector_01") // Comma-separated list for SQLite: "sector_01,sector_02"
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  
+  // Relations
+  inventory       UserInventoryItem[]
+  upgrades        UserUpgrade[]
+  snapshots       GameStateSnapshot[]
+  sectorStability SectorStability[]
+}
+
+model UserInventoryItem {
+  id             String      @id @default(uuid())
+  userProfileId  String
+  itemType       String      // e.g., "LASER_SCALPEL", "SUTURE_NEEDLE", "CHEMICAL_INJECTOR"
+  quantity       Int         @default(0)
+  
+  // Relations
+  userProfile    UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([userProfileId, itemType])
+}
+
+model UserUpgrade {
+  id             String      @id @default(uuid())
+  userProfileId  String
+  upgradeKey     String      // e.g., "MAX_LOAD_BUFFER", "DIAGNOSTIC_PRECISION", "TOOL_EFFICIENCY"
+  tier           Int         @default(0)
+
+  // Relations
+  userProfile    UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([userProfileId, upgradeKey])
+}
+
+model SectorStability {
+  id             String      @id @default(uuid())
+  userProfileId  String
+  sectorId       String      // e.g., "sector_01", "sector_02", "sector_03"
+  stabilityScore Float       @default(100.0)
+
+  // Relations
+  userProfile    UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([userProfileId, sectorId])
+}
+
+model LevelConfiguration {
+  id               String   @id @default(uuid())
+  sectorId         String   // "sector_01", "sector_02", "sector_03"
+  levelNumber      Int
+  seed             Int
+  width            Int
+  height           Int
+  maxNeuralLoad    Int
+  baseDecayRate    Float
+  allowedScalpels  Int      @default(0)
+  allowedSutures   Int      @default(0)
+  isShifting       Boolean  @default(false)
+  createdAt        DateTime @default(now())
+}
+
+model GameStateSnapshot {
+  id              String   @id @default(uuid())
+  userProfileId   String
+  levelId         String
+  seed            Int
+  elapsedSeconds  Float
+  finalVitality   Float
+  finalNeuralLoad Int
+  actionsLog      String   // Serialized JSON array of player actions
+  gridCoordinates String   // Serialized JSON of grid layout
+  isValidated     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  // Relations
+  userProfile     UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+}

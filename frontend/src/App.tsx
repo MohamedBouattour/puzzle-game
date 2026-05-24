@@ -78,7 +78,7 @@ export default function App() {
   // Responsiveness States
   const [deviceScale, setDeviceScale] = useState(1);
   const [isMobile, setIsMobile] = useState(false);
-  const touchTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLongPressRef = useRef(false);
 
   useEffect(() => {
@@ -1432,16 +1432,16 @@ export default function App() {
               )}
 
               {/* Connector Assembly (Build Selector) */}
-              <div className="flex flex-col gap-1 mb-2 border border-[#8b4513]/20 p-2 bg-[#0e0e0e]/60 rounded">
+              <div className="flex flex-col gap-1 mb-2 border border-[#8b4513]/25 p-2 bg-[#0e0e0e]/60 rounded">
                 <div className="font-label-caps text-[8px] text-[#cd7f32] tracking-wider text-center">Selected Connector Blueprint</div>
-                <div className="grid grid-cols-4 gap-1">
-                  {(['STRAIGHT', 'CURVE_60', 'CURVE_120', 'SPLIT_Y'] as ConnectorType[]).map((type) => {
+                <div className="grid grid-cols-5 gap-1">
+                  {(['STRAIGHT', 'CURVE_60', 'CURVE_120', 'SPLIT_Y', 'NONE'] as ConnectorType[]).map((type) => {
                     const labelMap: Record<ConnectorType, string> = {
                       'STRAIGHT': 'Straight',
                       'CURVE_60': 'Curve 60°',
                       'CURVE_120': 'Wide Arc',
                       'SPLIT_Y': 'Split Y',
-                      'NONE': 'None'
+                      'NONE': 'Dismantle'
                     };
                     const isSelected = buildType === type;
                     return (
@@ -1481,6 +1481,9 @@ export default function App() {
                             <line x1="8" y1="8" x2="3" y2="12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
                           </svg>
                         )}
+                        {type === 'NONE' && (
+                          <Trash2 className="h-3 w-3 opacity-80" />
+                        )}
                         <span>{labelMap[type]}</span>
                       </button>
                     );
@@ -1498,13 +1501,13 @@ export default function App() {
                           'CURVE_60': '60° Curve',
                           'CURVE_120': 'Wide Arc',
                           'SPLIT_Y': 'Split Y-Joint',
-                          'NONE': 'None'
+                          'NONE': 'Dismantle Tool'
                         }[buildType]
                       }
                     </span>
                   </div>
                   <div className="text-[#cd7f32] font-bold">
-                    +{buildType === 'STRAIGHT' ? 10 : buildType === 'CURVE_60' ? 15 : buildType === 'CURVE_120' ? 20 : buildType === 'SPLIT_Y' ? 30 : 0} MS/Ph
+                    {buildType === 'NONE' ? 'FREE' : `+${buildType === 'STRAIGHT' ? 10 : buildType === 'CURVE_60' ? 15 : buildType === 'CURVE_120' ? 20 : buildType === 'SPLIT_Y' ? 30 : 0} MS/Ph`}
                   </div>
                 </div>
               </div>
